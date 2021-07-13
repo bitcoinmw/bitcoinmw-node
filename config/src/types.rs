@@ -15,13 +15,422 @@
 //! Public types for config modules
 
 use std::fmt;
-use std::io;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 use std::path::PathBuf;
+use std::str::FromStr;
 
-use crate::core::global::{ChainTypes, DEFAULT_FUTURE_TIME_LIMIT};
-use crate::p2p;
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+
+use crate::core::global::{self, ChainTypes, DEFAULT_FUTURE_TIME_LIMIT};
+use crate::core::ser;
+use crate::core::ser::Readable;
+use crate::core::ser::Reader;
+use crate::core::ser::Writeable;
+use crate::core::ser::Writer;
+use crate::core::ser_multiwrite;
+use crate::core::try_iter_map_vec;
 use crate::pool;
 use crate::util::logger::LoggingConfig;
+use crate::{Error, ErrorKind};
+
+/// Maximum number of block headers a peer should ever send
+pub const MAX_BLOCK_HEADERS: u32 = 512;
+
+/// Maximum number of block bodies a peer should ever ask for and send
+#[allow(dead_code)]
+pub const MAX_BLOCK_BODIES: u32 = 16;
+
+/// Maximum number of peer addresses a peer should ever send
+pub const MAX_PEER_ADDRS: u32 = 256;
+
+/// Maximum number of block header hashes to send as part of a locator
+pub const MAX_LOCATORS: u32 = 20;
+
+/// How long a banned peer should be banned for
+const BAN_WINDOW: i64 = 10800;
+
+/// The max inbound peer count
+const PEER_MAX_INBOUND_COUNT: u32 = 128;
+
+/// The max outbound peer count
+const PEER_MAX_OUTBOUND_COUNT: u32 = 8;
+
+/// The min preferred outbound peer count
+const PEER_MIN_PREFERRED_OUTBOUND_COUNT: u32 = 8;
+
+/// The peer listener buffer count. Allows temporarily accepting more connections
+/// than allowed by PEER_MAX_INBOUND_COUNT to encourage network bootstrapping.
+const PEER_LISTENER_BUFFER_COUNT: u32 = 8;
+
+/// The enum that holds the connection info for this Peer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PeerAddr {
+	/// An IP based PeerAddr
+	Ip(SocketAddr),
+	/// An onion based Address
+	Onion(String),
+}
+
+impl Writeable for PeerAddr {
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), ser::Error> {
+		match self {
+			PeerAddr::Ip(ip) => match ip {
+				SocketAddr::V4(sav4) => {
+					ser_multiwrite!(
+						writer,
+						[write_u8, 0],
+						[write_fixed_bytes, &sav4.ip().octets().to_vec()],
+						[write_u16, sav4.port()]
+					);
+				}
+				SocketAddr::V6(sav6) => {
+					writer.write_u8(1)?;
+					for seg in &sav6.ip().segments() {
+						writer.write_u16(*seg)?;
+					}
+					writer.write_u16(sav6.port())?;
+				}
+			},
+			PeerAddr::Onion(onion) => {
+				if onion.len() > 100 {
+					return Err(ser::Error::TooLargeWriteErr);
+				}
+				writer.write_u8(2)?;
+				writer.write_bytes(onion)?;
+			}
+		}
+		Ok(())
+	}
+}
+
+impl Readable for PeerAddr {
+	fn read<R: Reader>(reader: &mut R) -> Result<PeerAddr, ser::Error> {
+		let v4_or_v6 = reader.read_u8()?;
+		if v4_or_v6 == 0 {
+			let ip = reader.read_fixed_bytes(4)?;
+			let port = reader.read_u16()?;
+			Ok(PeerAddr::Ip(SocketAddr::V4(SocketAddrV4::new(
+				Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]),
+				port,
+			))))
+		} else if v4_or_v6 == 1 {
+			let ip = try_iter_map_vec!(0..8, |_| reader.read_u16());
+			let ipv6 = Ipv6Addr::new(ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7]);
+			let port = reader.read_u16()?;
+			if let Some(ipv4) = ipv6.to_ipv4() {
+				Ok(PeerAddr::Ip(SocketAddr::V4(SocketAddrV4::new(ipv4, port))))
+			} else {
+				Ok(PeerAddr::Ip(SocketAddr::V6(SocketAddrV6::new(
+					ipv6, port, 0, 0,
+				))))
+			}
+		} else {
+			// '2' is used for onion addresses now
+			let oa = reader.read_bytes_len_prefix()?;
+			let onion_address = String::from_utf8(oa).unwrap_or("".to_string());
+			Ok(PeerAddr::Onion(onion_address))
+		}
+	}
+}
+
+impl<'de> Visitor<'de> for PeerAddrs {
+	type Value = PeerAddrs;
+
+	fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+		formatter.write_str("an array of dns names or IP addresses")
+	}
+
+	fn visit_seq<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+	where
+		M: SeqAccess<'de>,
+	{
+		let mut peers = Vec::with_capacity(access.size_hint().unwrap_or(0));
+
+		while let Some(entry) = access.next_element::<&str>()? {
+			// There is Onion addresses, we need to handle them
+			peers.push(PeerAddr::from_str(entry));
+		}
+		Ok(PeerAddrs { peers })
+	}
+}
+
+impl<'de> Deserialize<'de> for PeerAddrs {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		deserializer.deserialize_seq(PeerAddrs { peers: vec![] })
+	}
+}
+
+impl std::hash::Hash for PeerAddr {
+	/// If loopback address then we care about ip and port.
+	/// If regular address then we only care about the ip and ignore the port.
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		match self {
+			PeerAddr::Ip(ip) => {
+				if ip.ip().is_loopback() {
+					ip.hash(state);
+				} else {
+					ip.ip().hash(state);
+				}
+			}
+			PeerAddr::Onion(onion) => {
+				onion.hash(state);
+			}
+		}
+	}
+}
+
+impl PartialEq for PeerAddr {
+	/// If loopback address then we care about ip and port.
+	/// If regular address then we only care about the ip and ignore the port.
+	fn eq(&self, other: &PeerAddr) -> bool {
+		match self {
+			PeerAddr::Ip(ip) => match other {
+				PeerAddr::Ip(other_ip) => {
+					if ip.ip().is_loopback() {
+						ip == other_ip
+					} else {
+						ip.ip() == other_ip.ip()
+					}
+				}
+				_ => false,
+			},
+			PeerAddr::Onion(onion) => match other {
+				PeerAddr::Onion(other_onion) => onion == other_onion,
+				_ => false,
+			},
+		}
+	}
+}
+
+impl Eq for PeerAddr {}
+
+/// Peer addresses we know of that are fresh enough, in response to
+/// GetPeerAddrs.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PeerAddrs {
+	/// The vector of peers that are known to this node
+	pub peers: Vec<PeerAddr>,
+}
+
+impl Writeable for PeerAddrs {
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), ser::Error> {
+		writer.write_u32(self.peers.len() as u32)?;
+		for p in &self.peers {
+			p.write(writer)?;
+		}
+		Ok(())
+	}
+}
+
+impl Readable for PeerAddrs {
+	fn read<R: Reader>(reader: &mut R) -> Result<PeerAddrs, ser::Error> {
+		let peer_count = reader.read_u32()?;
+		if peer_count > MAX_PEER_ADDRS {
+			return Err(ser::Error::TooLargeReadErr);
+		} else if peer_count == 0 {
+			return Ok(PeerAddrs { peers: vec![] });
+		}
+		let mut peers = Vec::with_capacity(peer_count as usize);
+		for _ in 0..peer_count {
+			peers.push(PeerAddr::read(reader)?);
+		}
+		Ok(PeerAddrs { peers })
+	}
+}
+
+impl std::fmt::Display for PeerAddr {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			PeerAddr::Ip(ip) => write!(f, "{}", ip),
+			PeerAddr::Onion(onion) => {
+				let onion_address = &onion.to_string();
+				write!(f, "tor://{}", onion_address)
+			}
+		}
+	}
+}
+
+impl PeerAddr {
+	/// Convenient way of constructing a new peer_addr from an ip_addr
+	/// defaults to port 3414 on mainnet and 13414 on floonet.
+	pub fn from_ip(addr: IpAddr) -> PeerAddr {
+		let port = if global::is_testnet() { 13414 } else { 3414 };
+		PeerAddr::Ip(SocketAddr::new(addr, port))
+	}
+
+	/// Convenient way of constructing a new peer_addr from a String
+	pub fn from_str(addr: &str) -> PeerAddr {
+		let socket_addr = SocketAddr::from_str(addr);
+		if socket_addr.is_err() {
+			let socket_addrs = addr.to_socket_addrs();
+			if socket_addrs.is_ok() {
+				let vec: Vec<SocketAddr> = socket_addrs.unwrap().collect();
+				PeerAddr::Ip(vec[0])
+			} else {
+				PeerAddr::Onion(addr.to_string())
+			}
+		} else {
+			PeerAddr::Ip(socket_addr.unwrap())
+		}
+	}
+
+	/// If the ip is loopback then our key is "ip:port" (mainly for local usernet testing).
+	/// Otherwise we only care about the ip (we disallow multiple peers on the same ip address).
+	pub fn as_key(&self) -> String {
+		match self {
+			PeerAddr::Ip(ip) => {
+				if ip.ip().is_loopback() {
+					format!("{}:{}", ip.ip(), ip.port())
+				} else {
+					format!("{}", ip.ip())
+				}
+			}
+			PeerAddr::Onion(onion) => format!("{}", onion),
+		}
+	}
+
+	/// get the tor_pubkey for this PeerAddr
+	pub fn tor_pubkey(&self) -> Result<String, Error> {
+		match self {
+			PeerAddr::Ip(_ip) => {
+				return Err(ErrorKind::P2P("tor can't be used with IP".to_string()).into())
+			}
+			PeerAddr::Onion(onion) => {
+				if onion.ends_with(".onion") {
+					let onion = &onion[..(onion.len() - ".onion".len())];
+					return Ok(onion.to_string());
+				} else {
+					return Ok(onion.clone());
+				}
+			}
+		}
+	}
+}
+
+/// Configuration for the peer-to-peer server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct P2PConfig {
+	/// The host to bind to for the P2P network
+	pub host: IpAddr,
+	/// The port to bind to for the P2P network
+	pub port: u16,
+
+	/// Method used to get the list of seed nodes for initial bootstrap.
+	#[serde(default)]
+	pub seeding_type: Seeding,
+
+	/// The list of seed nodes, if using Seeding as a seed type
+	pub seeds: Option<PeerAddrs>,
+
+	/// The peers to allow to connect to this node
+	pub peers_allow: Option<PeerAddrs>,
+
+	/// Peers to deny
+	pub peers_deny: Option<PeerAddrs>,
+
+	/// The list of preferred peers that we will try to connect to
+	pub peers_preferred: Option<PeerAddrs>,
+
+	/// How long to ban peers for
+	pub ban_window: Option<i64>,
+
+	/// maximum inbound peers to allow
+	pub peer_max_inbound_count: Option<u32>,
+
+	/// maximum outbound peers to allow
+	pub peer_max_outbound_count: Option<u32>,
+
+	/// the min preferred outbound count
+	pub peer_min_preferred_outbound_count: Option<u32>,
+
+	/// the peer listener buffer count
+	pub peer_listener_buffer_count: Option<u32>,
+
+	/// The dandelion peer
+	pub dandelion_peer: Option<PeerAddr>,
+
+	/// Whether to assume an external tor process is running
+	pub tor_external: bool,
+
+	/// what port to run (or expect) tor to run on
+	pub tor_port: u16,
+
+	/// the onion address to use (required for external tor)
+	pub onion_address: Option<String>,
+}
+
+/// Default address for peer-to-peer connections.
+impl Default for P2PConfig {
+	fn default() -> P2PConfig {
+		let ipaddr = "0.0.0.0".parse().unwrap();
+		P2PConfig {
+			host: ipaddr,
+			port: 3414,
+			seeding_type: Seeding::default(),
+			seeds: None,
+			peers_allow: None,
+			peers_deny: None,
+			peers_preferred: None,
+			ban_window: None,
+			peer_max_inbound_count: None,
+			peer_max_outbound_count: None,
+			peer_min_preferred_outbound_count: None,
+			peer_listener_buffer_count: None,
+			dandelion_peer: None,
+			tor_external: false,
+			tor_port: 3417,
+			onion_address: None,
+		}
+	}
+}
+
+/// Note certain fields are options just so they don't have to be
+/// included in grin-server.toml, but we don't want them to ever return none
+impl P2PConfig {
+	/// return ban window
+	pub fn ban_window(&self) -> i64 {
+		match self.ban_window {
+			Some(n) => n,
+			None => BAN_WINDOW,
+		}
+	}
+
+	/// return maximum inbound peer connections count
+	pub fn peer_max_inbound_count(&self) -> u32 {
+		match self.peer_max_inbound_count {
+			Some(n) => n,
+			None => PEER_MAX_INBOUND_COUNT,
+		}
+	}
+
+	/// return maximum outbound peer connections count
+	pub fn peer_max_outbound_count(&self) -> u32 {
+		match self.peer_max_outbound_count {
+			Some(n) => n,
+			None => PEER_MAX_OUTBOUND_COUNT,
+		}
+	}
+
+	/// return minimum preferred outbound peer count
+	pub fn peer_min_preferred_outbound_count(&self) -> u32 {
+		match self.peer_min_preferred_outbound_count {
+			Some(n) => n,
+			None => PEER_MIN_PREFERRED_OUTBOUND_COUNT,
+		}
+	}
+
+	/// return peer buffer count for listener
+	pub fn peer_listener_buffer_count(&self) -> u32 {
+		match self.peer_listener_buffer_count {
+			Some(n) => n,
+			None => PEER_LISTENER_BUFFER_COUNT,
+		}
+	}
+}
 
 /// Web hooks configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -178,7 +587,7 @@ pub struct ServerConfig {
 	pub test_miner_wallet_url: Option<String>,
 
 	/// Configuration for the peer-to-peer server
-	pub p2p_config: p2p::P2PConfig,
+	pub p2p_config: P2PConfig,
 
 	/// Transaction pool configuration
 	#[serde(default)]
@@ -209,7 +618,7 @@ impl Default for ServerConfig {
 			foreign_api_secret_path: Some(".foreign_api_secret".to_string()),
 			tls_certificate_file: None,
 			tls_certificate_key: None,
-			p2p_config: p2p::P2PConfig::default(),
+			p2p_config: P2PConfig::default(),
 			dandelion_config: pool::DandelionConfig::default(),
 			stratum_mining_config: Some(StratumServerConfig::default()),
 			chain_type: ChainTypes::default(),
@@ -229,49 +638,22 @@ impl Default for ServerConfig {
 	}
 }
 
-/// Error type wrapping config errors.
-#[derive(Debug)]
-pub enum ConfigError {
-	/// Error with parsing of config file
-	ParseError(String, String),
-
-	/// Error with fileIO while reading config file
-	FileIOError(String, String),
-
-	/// No file found
-	FileNotFoundError(String),
-
-	/// Error serializing config values
-	SerializationError(String),
+/// Type of seeding the server will use to find other peers on the network.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum Seeding {
+	/// No seeding, mostly for tests that programmatically connect
+	None,
+	/// A list of seeds provided to the server (can be addresses or DNS names)
+	List,
+	/// Automatically get a list of seeds from multiple DNS
+	DNSSeed,
+	/// Mostly for tests, where connections are initiated programmatically
+	Programmatic,
 }
 
-impl fmt::Display for ConfigError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match *self {
-			ConfigError::ParseError(ref file_name, ref message) => write!(
-				f,
-				"Error parsing configuration file at {} - {}",
-				file_name, message
-			),
-			ConfigError::FileIOError(ref file_name, ref message) => {
-				write!(f, "{} {}", message, file_name)
-			}
-			ConfigError::FileNotFoundError(ref file_name) => {
-				write!(f, "Configuration file not found: {}", file_name)
-			}
-			ConfigError::SerializationError(ref message) => {
-				write!(f, "Error serializing configuration: {}", message)
-			}
-		}
-	}
-}
-
-impl From<io::Error> for ConfigError {
-	fn from(error: io::Error) -> ConfigError {
-		ConfigError::FileIOError(
-			String::from(""),
-			format!("Error loading config file: {}", error),
-		)
+impl Default for Seeding {
+	fn default() -> Seeding {
+		Seeding::DNSSeed
 	}
 }
 

@@ -23,8 +23,9 @@
 #[macro_use]
 extern crate serde_derive;
 
+use bmw_node_error::Error;
+use bmw_node_error::ErrorKind;
 use bmw_node_util::core;
-pub use bmw_node_util::p2p;
 pub use bmw_node_util::pool;
 use bmw_node_util::util;
 
@@ -33,4 +34,4 @@ pub mod config;
 pub mod types;
 
 pub use crate::config::initial_setup_server;
-pub use crate::types::{ConfigError, ConfigMembers, GlobalConfig};
+pub use crate::types::{ConfigMembers, GlobalConfig};

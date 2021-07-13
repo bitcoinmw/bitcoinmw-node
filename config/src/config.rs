@@ -27,10 +27,10 @@ use toml;
 
 use crate::comments::insert_comments;
 use crate::core::global;
-use crate::p2p;
 use crate::types::ServerConfig;
-use crate::types::{ConfigError, ConfigMembers, GlobalConfig};
+use crate::types::{ConfigMembers, GlobalConfig, Seeding};
 use crate::util::logger::LoggingConfig;
+use crate::{Error, ErrorKind};
 
 /// The default file name to use when trying to derive
 /// the node config file location
@@ -43,7 +43,7 @@ pub const API_SECRET_FILE_NAME: &str = ".api_secret";
 /// Foreign API secret
 pub const FOREIGN_API_SECRET_FILE_NAME: &str = ".foreign_api_secret";
 
-fn get_grin_path(chain_type: &global::ChainTypes) -> Result<PathBuf, ConfigError> {
+fn get_grin_path(chain_type: &global::ChainTypes) -> Result<PathBuf, Error> {
 	// Check if grin dir exists
 	let mut grin_path = match dirs::home_dir() {
 		Some(p) => p,
@@ -74,7 +74,7 @@ fn check_config_current_dir(path: &str) -> Option<PathBuf> {
 }
 
 /// Create file with api secret
-pub fn init_api_secret(api_secret_path: &PathBuf) -> Result<(), ConfigError> {
+pub fn init_api_secret(api_secret_path: &PathBuf) -> Result<(), Error> {
 	let mut api_secret_file = File::create(api_secret_path)?;
 	let api_secret: String = Alphanumeric
 		.sample_iter(&mut thread_rng())
@@ -85,7 +85,7 @@ pub fn init_api_secret(api_secret_path: &PathBuf) -> Result<(), ConfigError> {
 }
 
 /// Check if file contains a secret and nothing else
-pub fn check_api_secret(api_secret_path: &PathBuf) -> Result<(), ConfigError> {
+pub fn check_api_secret(api_secret_path: &PathBuf) -> Result<(), Error> {
 	let api_secret_file = File::open(api_secret_path)?;
 	let buf_reader = BufReader::new(api_secret_file);
 	let mut lines_iter = buf_reader.lines();
@@ -101,7 +101,7 @@ pub fn check_api_secret(api_secret_path: &PathBuf) -> Result<(), ConfigError> {
 fn check_api_secret_files(
 	chain_type: &global::ChainTypes,
 	secret_file_name: &str,
-) -> Result<(), ConfigError> {
+) -> Result<(), Error> {
 	let grin_path = get_grin_path(chain_type)?;
 	let mut api_secret_path = grin_path;
 	api_secret_path.push(secret_file_name);
@@ -113,7 +113,7 @@ fn check_api_secret_files(
 }
 
 /// Handles setup and detection of paths for node
-pub fn initial_setup_server(chain_type: &global::ChainTypes) -> Result<GlobalConfig, ConfigError> {
+pub fn initial_setup_server(chain_type: &global::ChainTypes) -> Result<GlobalConfig, Error> {
 	check_api_secret_files(chain_type, API_SECRET_FILE_NAME)?;
 	check_api_secret_files(chain_type, FOREIGN_API_SECRET_FILE_NAME)?;
 	// Use config file if current directory if it exists, .bmw home otherwise
@@ -187,7 +187,7 @@ impl GlobalConfig {
 				defaults.api_http_addr = "127.0.0.1:23413".to_owned();
 				defaults.p2p_config.port = 23414;
 				defaults.p2p_config.tor_port = 23417;
-				defaults.p2p_config.seeding_type = p2p::Seeding::None;
+				defaults.p2p_config.seeding_type = Seeding::None;
 				defaults
 					.stratum_mining_config
 					.as_mut()
@@ -207,16 +207,14 @@ impl GlobalConfig {
 	}
 
 	/// Requires the path to a config file
-	pub fn new(file_path: &str) -> Result<GlobalConfig, ConfigError> {
+	pub fn new(file_path: &str) -> Result<GlobalConfig, Error> {
 		let mut return_value = GlobalConfig::default();
 		return_value.config_file_path = Some(PathBuf::from(&file_path));
 
 		// Config file path is given but not valid
 		let config_file = return_value.config_file_path.clone().unwrap();
 		if !config_file.exists() {
-			return Err(ConfigError::FileNotFoundError(String::from(
-				config_file.to_str().unwrap(),
-			)));
+			return Err(ErrorKind::ConfigError(String::from(config_file.to_str().unwrap())).into());
 		}
 
 		// Try to parse the config file if it exists, explode if it does exist but
@@ -225,7 +223,7 @@ impl GlobalConfig {
 	}
 
 	/// Read config
-	fn read_config(mut self) -> Result<GlobalConfig, ConfigError> {
+	fn read_config(mut self) -> Result<GlobalConfig, Error> {
 		let mut file = File::open(self.config_file_path.as_mut().unwrap())?;
 		let mut contents = String::new();
 		file.read_to_string(&mut contents)?;
@@ -237,10 +235,12 @@ impl GlobalConfig {
 				return Ok(self);
 			}
 			Err(e) => {
-				return Err(ConfigError::ParseError(
+				return Err(ErrorKind::ConfigError(format!(
+					"{}: {}",
 					self.config_file_path.unwrap().to_str().unwrap().to_string(),
-					format!("{}", e),
-				));
+					e.to_string(),
+				))
+				.into());
 			}
 		}
 	}
@@ -288,19 +288,19 @@ impl GlobalConfig {
 	}
 
 	/// Serialize config
-	pub fn ser_config(&mut self) -> Result<String, ConfigError> {
+	pub fn ser_config(&mut self) -> Result<String, Error> {
 		let encoded: Result<String, toml::ser::Error> =
 			toml::to_string(self.members.as_mut().unwrap());
 		match encoded {
 			Ok(enc) => return Ok(enc),
 			Err(e) => {
-				return Err(ConfigError::SerializationError(format!("{}", e)));
+				return Err(ErrorKind::ConfigError(format!("{}", e)).into());
 			}
 		}
 	}
 
 	/// Write configuration to a file
-	pub fn write_to_file(&mut self, name: &str) -> Result<(), ConfigError> {
+	pub fn write_to_file(&mut self, name: &str) -> Result<(), Error> {
 		let conf_out = self.ser_config()?;
 		let fixed_config = GlobalConfig::fix_log_level(conf_out);
 		let commented_config = insert_comments(fixed_config);
