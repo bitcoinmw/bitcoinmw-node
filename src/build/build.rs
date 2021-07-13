@@ -21,32 +21,32 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-    // Setting up git hooks in the project: rustfmt and so on.
-    let git_hooks = format!(
-        "git config core.hooksPath {}",
-        PathBuf::from("./.hooks").to_str().unwrap()
-    );
+	// Setting up git hooks in the project: rustfmt and so on.
+	let git_hooks = format!(
+		"git config core.hooksPath {}",
+		PathBuf::from("./.hooks").to_str().unwrap()
+	);
 
-    if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(&["/C", &git_hooks])
-            .output()
-            .expect("failed to execute git config for hooks");
-    } else {
-        Command::new("sh")
-            .args(&["-c", &git_hooks])
-            .output()
-            .expect("failed to execute git config for hooks");
-    }
+	if cfg!(target_os = "windows") {
+		Command::new("cmd")
+			.args(&["/C", &git_hooks])
+			.output()
+			.expect("failed to execute git config for hooks");
+	} else {
+		Command::new("sh")
+			.args(&["-c", &git_hooks])
+			.output()
+			.expect("failed to execute git config for hooks");
+	}
 
-    // build and versioning information
-    let mut opts = built::Options::default();
-    opts.set_dependencies(true);
-    let out_dir_path = format!("{}{}", env::var("OUT_DIR").unwrap(), "/built.rs");
-    // don't fail the build if something's missing, may just be cargo release
-    let _ = built::write_built_file_with_opts(
-        &opts,
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-        Path::new(&out_dir_path),
-    );
+	// build and versioning information
+	let mut opts = built::Options::default();
+	opts.set_dependencies(true);
+	let out_dir_path = format!("{}{}", env::var("OUT_DIR").unwrap(), "/built.rs");
+	// don't fail the build if something's missing, may just be cargo release
+	let _ = built::write_built_file_with_opts(
+		&opts,
+		Path::new(env!("CARGO_MANIFEST_DIR")),
+		Path::new(&out_dir_path),
+	);
 }
