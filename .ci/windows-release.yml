@@ -1,6 +1,6 @@
 steps:
   - script: |
-      .ci\win32_cargo.bat test --all
+      test_static_win32.bat
     displayName: Cargo Test All
     condition:  and(succeeded(), contains(variables['Build.SourceBranch'], 'refs/tags/'), eq(variables['CI_JOB'], 'release' ))
   - script: |
