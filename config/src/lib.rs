@@ -1,4 +1,4 @@
-// Copyright 2021 The BMW Developers
+// Copyright 2020 The Grin Developers
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use grin_chain as chain;
-pub use grin_core as core;
-pub use grin_p2p as p2p;
-pub use grin_pool as pool;
-pub use grin_util as util;
+//! Crate wrapping up the Grin binary and configuration file
+
+#![deny(non_upper_case_globals)]
+#![deny(non_camel_case_types)]
+#![deny(non_snake_case)]
+#![deny(unused_mut)]
+#![warn(missing_docs)]
+
+#[macro_use]
+extern crate serde_derive;
+
+use bmw_node_util::core;
+pub use bmw_node_util::p2p;
+pub use bmw_node_util::pool;
+use bmw_node_util::util;
+
+mod comments;
+pub mod config;
+pub mod types;
+
+pub use crate::config::initial_setup_server;
+pub use crate::types::{ConfigError, ConfigMembers, GlobalConfig};

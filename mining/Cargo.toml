@@ -1,5 +1,5 @@
 [package]
-name = "bitcoinmw_node_mining"
+name = "bmw_node_mining"
 version = "0.0.1"
 authors = ["BMW Developers"]
 description = "BMW NODE Mining Code"

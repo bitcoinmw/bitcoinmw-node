@@ -1,5 +1,5 @@
 [package]
-name = "bitcoinmw_node_tor"
+name = "bmw_node_tor"
 version = "0.0.1"
 authors = ["BMW Developers"]
 description = "BMW NODE Tor Code"

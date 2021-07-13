@@ -12,11 +12,20 @@ build = "src/build/build.rs"
 edition = "2018"
 
 [workspace]
-members = ["bmw", "mining", "tor", "util", "common"]
+members = ["bmw", "mining", "tor", "util", "common", "config"]
 
 [[bin]]
 name = "bmw-node"
 path = "src/bin/bmw-node.rs"
 
+[dependencies]
+clap = { version = "2.33", features = ["yaml"] }
+
+bmw_node_util = { path = "./util", version = "0.0.1" }
+bmw_node_mining = { path = "./mining", version = "0.0.1" }
+bmw_node_tor = { path = "./tor", version = "0.0.1" }
+bmw_node_config = { path = "./config", version = "0.0.1" }
+
 [build-dependencies]
 built = { version = "0.4", features = ["git2"]}
+

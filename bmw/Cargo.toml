@@ -1,5 +1,5 @@
 [package]
-name = "bitcoinmw_node_bmw"
+name = "bmw_node_bmw"
 version = "0.0.1"
 authors = ["BMW Developers"]
 description = "BMW NODE Server Code"
