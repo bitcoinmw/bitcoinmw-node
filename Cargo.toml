@@ -1,0 +1,22 @@
+[package]
+name = "bitcoinmw-node"
+version = "0.0.1"
+authors = ["BitcoinMW Developers <bitcoinmw@protonmail.com>"]
+description = "Simple, private and scalable cryptocurrency implementation based on the Mimblewimble chain format with installation of the Bitcoin UTXO set."
+license = "Apache-2.0"
+repository = "https://github.com/bitcoinmw/bitcoinmw-node"
+keywords = [ "crypto", "bitcoinmw", "mimblewimble" ]
+readme = "README.md"
+exclude = ["**/*.bmw", "**/*.bmw"]
+build = "src/build/build.rs"
+edition = "2018"
+
+[workspace]
+members = ["bmw", "mining", "tor", "util", "common"]
+
+[[bin]]
+name = "bmw-node"
+path = "src/bin/bmw-node.rs"
+
+[build-dependencies]
+built = { version = "0.4", features = ["git2"]}
