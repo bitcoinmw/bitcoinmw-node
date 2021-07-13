@@ -1,6 +1,6 @@
 steps:
   - script: |
-      .ci\win32_cargo.bat --target=i686-pc-windows-msvc test --all
+      .ci\win32_cargo.bat test --target=i686-pc-windows-msvc --all
     displayName: Cargo Test All
     condition:  and(succeeded(), contains(variables['Build.SourceBranch'], 'refs/tags/'), eq(variables['CI_JOB'], 'release' ))
   - script: |
