@@ -14,5 +14,6 @@
 
 pub use grin_chain as chain;
 pub use grin_core as core;
+pub use grin_p2p as p2p;
 pub use grin_pool as pool;
 pub use grin_util as util;

@@ -1,8 +1,8 @@
 [package]
-name = "bmw_node_tor"
+name = "bmw_node_p2p"
 version = "0.0.1"
 authors = ["BMW Developers"]
-description = "BMW NODE Tor Code"
+description = "BMW NODE P2P Code"
 license = "Apache-2.0"
 repository = "https://github.com/bitcoinmw/bitcoinmw-node"
 keywords = [ "crypto", "bmw", "mimblewimble" ]

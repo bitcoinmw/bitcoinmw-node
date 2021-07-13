@@ -18,7 +18,7 @@ edition = "2018"
 #grin_store = { git = "https://github.com/bitcoinmw/bitcoinmw", tag = "v0.0.1"}
 #grin_servers = { git = "https://github.com/bitcoinmw/bitcoinmw", tag = "v0.0.1"}
 #grin_pool = { git = "https://github.com/bitcoinmw/bitcoinmw", tag = "v0.0.1" }
-
+#grin_p2p = { git = "https://github.com/bitcoinmw/bitcoinmw", tag = "v0.0.1" }
 
 # For bleeding edge
 grin_core = { git = "https://github.com/bitcoinmw/bitcoinmw", branch = "master" }
@@ -29,6 +29,7 @@ grin_api = { git = "https://github.com/bitcoinmw/bitcoinmw", branch = "master" }
 grin_store = { git = "https://github.com/bitcoinmw/bitcoinmw", branch = "master" }
 grin_servers = { git = "https://github.com/bitcoinmw/bitcoinmw", branch = "master" }
 grin_pool = { git = "https://github.com/bitcoinmw/bitcoinmw", branch = "master" }
+grin_p2p = { git = "https://github.com/bitcoinmw/bitcoinmw", branch = "master" }
 
 # For local testing
 #grin_core = { path = "../../bitcoinmw/core"}
@@ -39,3 +40,4 @@ grin_pool = { git = "https://github.com/bitcoinmw/bitcoinmw", branch = "master" 
 #grin_store = { path = "../../bitcoinmw/store"}
 #grin_servers = { path = "../../bitcoinmw/servers"}
 #grin_pool = { git = "../../bitcoinmw/pool"}
+#grin_p2p = { git = "../../bitcoinmw/p2p"}

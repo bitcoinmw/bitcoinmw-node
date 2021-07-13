@@ -17,6 +17,9 @@ extern crate clap;
 
 use bmw_node_util as util;
 
+use bmw_node_error::Error;
+use bmw_node_p2p::P2PServer;
+use bmw_node_tor::TorServer;
 use clap::App;
 use util::core::global;
 
@@ -36,8 +39,6 @@ fn real_main() -> i32 {
 		.version(built_info::PKG_VERSION)
 		.get_matches();
 
-	//let node_config;
-
 	let chain_type = if args.is_present("testnet") {
 		global::ChainTypes::Testnet
 	} else if args.is_present("usernet") {
@@ -50,6 +51,20 @@ fn real_main() -> i32 {
 	};
 
 	println!("chain type = {:?}", chain_type);
+	let result = start_server();
+	if result.is_err() {
+		println!("Server Start resulted in an error: {:?}", result);
+		-1
+	} else {
+		0
+	}
+}
 
-	0
+fn start_server() -> Result<(), Error> {
+	let tor = TorServer::new()?;
+	let p2p = P2PServer::new()?;
+	tor.start()?;
+	p2p.start()?;
+
+	Ok(())
 }

@@ -1,4 +1,4 @@
-// Copyright 2020 The Grin Developers
+// Copyright 2021 The BMW Developers
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Crate wrapping up the Grin binary and configuration file
+use crate::Error;
 
-#![deny(non_upper_case_globals)]
-#![deny(non_camel_case_types)]
-#![deny(non_snake_case)]
-#![deny(unused_mut)]
-#![warn(missing_docs)]
+pub struct TorServer {}
 
-#[macro_use]
-extern crate serde_derive;
+impl TorServer {
+	pub fn new() -> Result<TorServer, Error> {
+		Ok(TorServer {})
+	}
+	pub fn start(&self) -> Result<(), Error> {
+		println!("Starting Tor");
 
-use bmw_node_error::{Error, ErrorKind};
-use bmw_node_util::core;
-pub use bmw_node_util::pool;
-use bmw_node_util::util;
-
-mod comments;
-pub mod config;
-pub mod types;
-
-pub use crate::config::initial_setup_server;
-pub use crate::types::{ConfigMembers, GlobalConfig};
+		Ok(())
+	}
+}
