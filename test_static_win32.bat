@@ -9,4 +9,5 @@ set OPENSSL_LIB_DIR=%cd%\LLVM_OpenSSL-Win32\lib\
 set OPENSSL_INCLUDE_DIR=%cd%\LLVM_OpenSSL-Win32\include\
 set OPENSSL_STATIC=yes
 
+rustup toolchain install stable-i686-pc-windows-msvc
 call .ci\win32_cargo.bat +stable-i686-pc-windows-msvc test --all
